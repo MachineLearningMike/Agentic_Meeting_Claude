@@ -1,0 +1,10 @@
+# This package (editable)
+-e .
+
+anthropic>=2.12.0
+
+# Web chat UI (apps/web/app.py)
+chainlit>=2.0.0
+
+# Tests
+pytest>=8.0
