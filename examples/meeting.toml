@@ -1,0 +1,62 @@
+# A meeting configuration. Run it with:
+#
+#     python apps/cli/meet.py host examples/meeting.toml
+#
+# Copy this file and change it for your own meeting.
+
+topic = "Reduce excessive trading frequency"
+background = """
+The trading system generates too many trades; fees and slippage reduce
+profitability.
+"""
+
+# Optional settings:
+# project_id = "trading-ai"      # meetings with the same id share their memory
+# language = "日本語"             # default: the language the meeting is held in
+max_rounds_per_agenda = 2        # deliberation rounds per agenda item (default 3)
+
+# The agenda: discussed one item at a time, in this order.
+agenda = [
+    "Fixed versus adaptive trading frequency",
+    "What is still unknown",
+]
+
+# Agentic participants speak in every round, from their role statement.
+
+[[participants]]
+id = "researcher"
+name = "Researcher"
+role = "researcher"
+statement = "Develops alternative trading strategies and argues for the most promising one."
+
+[[participants]]
+id = "risk"
+name = "Risk analyst"
+role = "risk analyst"
+statement = "Identifies risks, drawdowns and failure modes."
+instructions = "Always quantify the downside."   # optional: extra rules for this participant
+# model = "claude-sonnet-5-5"                    # optional: a different Claude model
+
+[[participants]]
+id = "engineer"
+name = "Engineer"
+role = "engineer"
+statement = "Assesses implementation feasibility and cost."
+
+# Human participants (human = true) answer the moderator's questions from
+# their consoles. Their role statement tells the moderator what to ask them.
+
+[[participants]]
+id = "owner"
+name = "Project owner"
+role = "project owner"
+statement = "Owns the budget and makes the final decisions."
+human = true
+
+[[participants]]
+id = "advisor"
+name = "Trading advisor"
+role = "trading advisor"
+statement = "Knows how the desk trades today and what traders will accept."
+human = true
+# language = "日本語"             # optional: questions to this person use it

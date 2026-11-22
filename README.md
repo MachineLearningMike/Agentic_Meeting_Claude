@@ -25,12 +25,99 @@ Everything also runs offline with `--model fake`, a scripted demo model.
 ```bash
 python apps/cli/main.py                        # console meeting, Claude Opus 5.5
 python apps/cli/main.py --model fake           # offline demo
+python apps/cli/meet.py host examples/meeting.toml   # your own agenda and participants
 python apps/cli/trading_project.py 1           # three meetings that build on each other
 python apps/cli/show_prompts.py --out p.md     # every prompt of an example meeting
 cd apps/web && chainlit run app.py             # browser UI, shared meetings
 ```
 
 All apps share `data/meetings.db` (override with `MEETING_DB`).
+
+## Configure a meeting
+
+A meeting's agenda and participants are set in a TOML (or JSON) file. Copy
+[examples/meeting.toml](examples/meeting.toml) and change it:
+
+```toml
+topic = "Reduce excessive trading frequency"
+background = "Fees and slippage reduce profitability."
+
+agenda = [
+    "Fixed versus adaptive trading frequency",
+    "What is still unknown",
+]
+
+[[participants]]                 # agentic: speaks in every round
+name = "Risk analyst"
+role = "risk analyst"
+statement = "Identifies risks, drawdowns and failure modes."
+
+[[participants]]                 # human: answers from their console
+id = "owner"
+name = "Project owner"
+statement = "Owns the budget and makes the final decisions."
+human = true
+```
+
+| Participant key | Meaning |
+| --- | --- |
+| `name` | Shown in the meeting; required |
+| `id` | Used to join and in records; made from the name if missing |
+| `role` | Short role title |
+| `statement` | The role statement. An agentic participant argues from it; for a human it tells the moderator what to ask them |
+| `human` | `true` for a person; otherwise the participant is agentic |
+| `instructions` | Extra rules for an agentic participant |
+| `model` | A different Claude model id for an agentic participant |
+| `language` | Questions to this human are written in it |
+
+Meeting keys: `topic` (required), `background`, `agenda`, `participants`,
+`language`, `project_id`, `max_rounds_per_agenda`, `max_total_rounds`,
+`problems`, `objectives`, `meeting_id`. A misspelled key is reported, not
+ignored.
+
+Run it with `apps/cli/meet.py`. Human participants take part through
+consoles that register with the meeting:
+
+```bash
+# One console: you answer for every human participant.
+python apps/cli/meet.py host examples/meeting.toml
+
+# One console per human. The host takes a seat; the meeting starts once the
+# others have registered theirs (or when the host presses Enter).
+python apps/cli/meet.py host examples/meeting.toml --as owner
+python apps/cli/meet.py join advisor          # in the advisor's terminal
+
+# The host takes no seat and only shows the meeting.
+python apps/cli/meet.py host examples/meeting.toml --serve
+```
+
+Every console shows the meeting as it runs. A question the moderator
+addresses to one person can only be answered from that person's console;
+a general question, or one for somebody who is not connected, by anyone.
+An empty answer skips the question and `/decline` stops further questions.
+
+Consoles connect to `127.0.0.1:8765`. For other machines, host with
+`--listen 0.0.0.0:8765` and join with `--address HOST:8765`. There is no
+password, so only do this on a network you trust. `--model fake` works here
+too.
+
+In code, the same pieces are `load_meeting_config()` and `ConsoleHub`:
+
+```python
+from agentic_meeting import ClaudeModel, ConsoleHub, Meeting, load_meeting_config
+
+meeting_input = load_meeting_config("examples/meeting.toml")
+hub = ConsoleHub(meeting_input["participants"])
+hub.register("owner", send=print)       # a console is a function that shows text
+hub.wait_for_consoles()
+
+meeting = Meeting(ClaudeModel())
+result = meeting.start(meeting_input)
+while not result.finished:
+    result = meeting.resume(result.thread_id, hub.ask(result.question))
+
+# whenever a console's person types a line: hub.submit(send, line)
+```
 
 ## Use the engine
 
@@ -105,7 +192,7 @@ Messages API:
 pytest
 ```
 
-159 tests, no API key needed: a scripted model stands in for Claude, and a
+188 tests, no API key needed: a scripted model stands in for Claude, and a
 fake Anthropic client checks the exact requests `ClaudeModel` sends.
 
 ## Layout
@@ -115,13 +202,16 @@ agentic_meeting/
 ├── engine.py          Meeting: runs the steps, pauses and resumes
 ├── model.py           ClaudeModel: requests to the Messages API
 ├── checkpoints.py     Memory and SQLite checkpoints
+├── config.py          Meeting configuration files
+├── consoles.py        ConsoleHub: the human participants' consoles
 ├── state.py           MeetingState, MeetingInput, MeetingOutput
 ├── schemas.py         Artifact types and lifecycle rules
 ├── storage.py         SQLite: meeting records + project state
 ├── history.py         Loads project memory for a meeting
 ├── testing.py         Scripted models for tests and demos
 └── nodes/             The steps: analysis, deliberation, moderator, ...
-apps/cli/              Console meeting, trading example, prompt dump
+apps/cli/              Console meeting, configured meeting (meet.py), trading example, prompt dump
+examples/              A meeting configuration to copy
 apps/web/              Chainlit browser UI
 tests/
 ```

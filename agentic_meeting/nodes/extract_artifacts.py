@@ -24,6 +24,7 @@ from .common import (
     language_rule,
     parse_json_object,
     participants_overview,
+    recent_messages,
 )
 
 
@@ -454,11 +455,7 @@ def extract_meeting_artifacts(state: dict, ctx) -> dict:
         "participants": participants_overview(state),
         "meeting_summary": state.get("meeting_summary", ""),
         "existing_artifacts": compact_state(current_state),
-        "conversation": [
-            message.content
-            for message in state.get("messages", [])
-            if hasattr(message, "content")
-        ],
+        "conversation": recent_messages(state, limit=None),
     }
 
     system_prompt = """

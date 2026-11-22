@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from agentic_meeting.nodes.common import parse_json_object
@@ -114,3 +116,21 @@ def test_parse_json_object_rejects_missing_object():
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
+
+
+def test_extraction_sees_the_whole_conversation():
+    from agentic_meeting import Meeting
+    from agentic_meeting.testing import ASK, ScriptedModel
+
+    model = ScriptedModel(replies={
+        "moderator": [ASK],
+        "deliberation": ["Use adaptive frequency."],
+    })
+    meeting = Meeting(model)
+    result = meeting.start({"topic": "Trading"})
+    meeting.resume(result.thread_id, "Adaptive, approved.")
+
+    conversation = json.loads(model.calls_for("extraction")[0]["human"])["conversation"]
+
+    assert any("Use adaptive frequency." in entry for entry in conversation)
+    assert "Adaptive, approved." in conversation

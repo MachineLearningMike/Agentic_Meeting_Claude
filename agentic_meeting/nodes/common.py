@@ -69,6 +69,12 @@ def participants_overview(state: dict) -> list[dict]:
             "name": participant.get("name", participant["id"]),
             "role": participant.get("role", ""),
             "is_human": participant.get("is_human", False),
+            # The role statement, so that others know what to ask whom.
+            **(
+                {"description": participant["description"]}
+                if participant.get("description")
+                else {}
+            ),
             **(
                 {"language": participant["language"]}
                 if participant.get("language")
