@@ -2,7 +2,8 @@ import json
 
 import pytest
 
-from fakes import ScriptedModel, invoke, new_harness
+from agentic_meeting import Meeting
+from agentic_meeting.testing import ScriptedModel
 from agentic_meeting.history import compact_state, load_project_context
 from agentic_meeting.nodes.extract_artifacts import resolve_extraction
 from agentic_meeting.storage import MeetingStore
@@ -441,45 +442,35 @@ def test_compact_state_keeps_id_text_and_status():
     assert compact["decisions"] == []
 
 
-# --- across meetings, through the harness --------------------------------------
+# --- across meetings, through the engine ---------------------------------------
 
 
 def run_meeting(store, extraction=None, project_id="trading-ai", **state):
-    """Run one meeting; the harness loads and saves project memory itself."""
+    """Run one meeting; the engine loads and saves project memory itself."""
 
     replies = {"extraction": [json.dumps(extraction)]} if extraction else {}
     model = ScriptedModel(replies=replies)
-    harness = new_harness()
-    config = {
-        "configurable": {
-            "thread_id": "t",
-            "meeting_model": model,
-            "meeting_store": store,
-        }
-    }
-
-    result = invoke(harness, 
-        {"project_id": project_id, "topic": "Adaptive trading frequency", **state},
-        config,
+    result = Meeting(model, store=store).start(
+        {"project_id": project_id, "topic": "Adaptive trading frequency", **state}
     )
     return result, model
 
 
 def prompt_of(model, node, index=0):
-    return json.loads(model.calls_for(node)[index]["human"])
+    return json.loads(model.calls_for(node)[index]["user"])
 
 
 def test_meeting_is_saved_automatically(store):
     result, _ = run_meeting(store)
 
-    assert result["meeting_saved"] is True
-    assert store.get(result["meeting_id"]) == result["meeting_record"]
+    assert result.state["meeting_saved"] is True
+    assert store.get(result.state["meeting_id"]) == result.state["meeting_record"]
 
 
 def test_first_meeting_of_a_project_has_empty_context(store):
     result, model = run_meeting(store)
 
-    assert result["project_context"]["history"] == []
+    assert result.state["project_context"]["history"] == []
     assert "project_context" in prompt_of(model, "analysis")
 
 
@@ -488,7 +479,7 @@ def test_nodes_see_project_memory(store):
         "proposals": [{"description": "Adaptive trading frequency"}],
         "unresolved_issues": [{"description": "Transaction costs are unevaluated"}],
     })
-    proposal_id = first["meeting_record"]["proposals"][0]["id"]
+    proposal_id = first.state["meeting_record"]["proposals"][0]["id"]
 
     _, model = run_meeting(store)
 
@@ -497,17 +488,17 @@ def test_nodes_see_project_memory(store):
         assert context["current_state"]["proposals"] == [
             {"id": proposal_id, "text": "Adaptive trading frequency", "status": "proposed"}
         ]
-        assert context["history"][0]["meeting_id"] == first["meeting_id"]
+        assert context["history"][0]["meeting_id"] == first.state["meeting_id"]
         assert "authoritative" in model.calls_for(node)[0]["system"]
 
 
 def test_without_project_id_meeting_is_saved_but_no_memory_loaded(store):
     result, model = run_meeting(store, project_id="")
 
-    assert "project_context" not in result
+    assert "project_context" not in result.state
     assert "project_context" not in prompt_of(model, "analysis")
     assert "authoritative" not in model.calls_for("analysis")[0]["system"]
-    assert store.get(result["meeting_id"]) is not None
+    assert store.get(result.state["meeting_id"]) is not None
 
 
 def test_caller_supplied_context_is_kept(store):
@@ -517,21 +508,19 @@ def test_caller_supplied_context_is_kept(store):
 
     result, model = run_meeting(store, project_context=supplied)
 
-    assert result["project_context"] == supplied
+    assert result.state["project_context"] == supplied
     assert prompt_of(model, "analysis")["project_context"]["history"][0][
         "meeting_id"] == "external"
 
 
 def test_without_store_nothing_is_loaded_or_saved():
     model = ScriptedModel()
-    harness = new_harness()
-    config = {"configurable": {"thread_id": "t", "meeting_model": model}}
 
-    result = invoke(harness, {"project_id": "trading-ai", "topic": "T"}, config)
+    result = Meeting(model).start({"project_id": "trading-ai", "topic": "T"})
 
-    assert "project_context" not in result
-    assert "meeting_saved" not in result
-    assert result["current_phase"] == "completed"
+    assert "project_context" not in result.state
+    assert "meeting_saved" not in result.state
+    assert result.finished
 
 
 def test_three_meetings_continue_the_same_work(store):
@@ -545,9 +534,9 @@ def test_three_meetings_continue_the_same_work(store):
             {"description": "Transaction costs are unevaluated"},
         ],
     })
-    proposal_id = first["meeting_record"]["proposals"][0]["id"]
-    issue_ids = [i["id"] for i in first["meeting_record"]["unresolved_issues"]]
-    assert first["meeting_record"]["arguments"][0]["target_id"] == proposal_id
+    proposal_id = first.state["meeting_record"]["proposals"][0]["id"]
+    issue_ids = [i["id"] for i in first.state["meeting_record"]["unresolved_issues"]]
+    assert first.state["meeting_record"]["arguments"][0]["target_id"] == proposal_id
 
     # Meeting 2 sees Meeting 1's work and moves it forward.
     second, model = run_meeting(store, {
@@ -557,11 +546,11 @@ def test_three_meetings_continue_the_same_work(store):
             {"id": issue_ids[1], "status": "resolved", "note": "Costs measured"},
         ],
     })
-    shown = json.loads(model.calls_for("extraction")[0]["human"])["existing_artifacts"]
+    shown = json.loads(model.calls_for("extraction")[0]["user"])["existing_artifacts"]
     assert [p["id"] for p in shown["proposals"]] == [proposal_id]
     assert len(shown["unresolved_issues"]) == 2
-    assert second["meeting_record"]["proposals"] == []
-    assert len(second["extraction_warnings"]) == 1
+    assert second.state["meeting_record"]["proposals"] == []
+    assert len(second.state["extraction_warnings"]) == 1
 
     # Meeting 3 decides.
     run_meeting(store, {

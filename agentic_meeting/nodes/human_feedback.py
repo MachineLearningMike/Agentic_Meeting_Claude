@@ -57,11 +57,9 @@ def receive_feedback(state: dict, response) -> dict:
     return {
         "user_feedback": feedback,
         "user_declined_feedback": decline_future,
-        "pending_user_input": False,
-        "current_phase": "analysis",
         "messages": [
             message(
-                "human",
+                "user",
                 f"[{speaker.get('name', speaker['id'])}] {feedback}" if speaker else feedback,
                 name=speaker["id"] if speaker else None,
             )

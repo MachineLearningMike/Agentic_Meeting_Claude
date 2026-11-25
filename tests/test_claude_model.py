@@ -50,11 +50,71 @@ def test_default_request():
     assert params["system"] == [{
         "type": "text", "text": "Analyze.", "cache_control": {"type": "ephemeral"},
     }]
-    assert params["messages"] == [{"role": "user", "content": '{"topic": "T"}'}]
+    assert params["messages"] == [{
+        "role": "user", "content": [{"type": "text", "text": '{"topic": "T"}'}],
+    }]
     assert params["output_config"] == {"effort": "medium"}
     assert params["betas"] == [FALLBACK_BETA]
     assert params["fallbacks"] == "default"
     assert "thinking" not in params  # adaptive thinking is the default
+
+
+SPLIT = ModelRequest(node="moderator", system="s", shared='{\n  "topic": "T",\n', user='  "round_count": 1\n}')
+
+
+def test_meeting_wide_data_is_a_cached_block_before_the_rest():
+    client = FakeClient()
+
+    ClaudeModel(client=client).complete(SPLIT)
+
+    assert client.requests[0]["messages"][0]["content"] == [
+        {"type": "text", "text": SPLIT.shared, "cache_control": {"type": "ephemeral"}},
+        {"type": "text", "text": SPLIT.user},
+    ]
+
+
+def test_cache_ttl_can_be_an_hour_or_off():
+    client = FakeClient()
+
+    ClaudeModel(client=client, cache_ttl="1h").complete(SPLIT)
+    ClaudeModel(client=client, cache_ttl=None).complete(SPLIT)
+    hour, off = client.requests
+
+    marker = {"type": "ephemeral", "ttl": "1h"}
+    assert hour["system"][0]["cache_control"] == marker
+    assert hour["messages"][0]["content"][0]["cache_control"] == marker
+    assert "cache_control" not in json.dumps(off)
+
+    with pytest.raises(ValueError, match="cache_ttl"):
+        ClaudeModel(client=client, cache_ttl="2h")
+
+
+def test_a_meetings_requests_share_their_start_across_rounds():
+    decision = {
+        "action": "continue_discussion", "reason": "", "question_for_user": "",
+        "agenda_summary": "", "target_agenda_id": "", "ask_participant_id": "",
+    }
+    client = FakeClient([
+        reply("A."), reply("D1."), reply(json.dumps(decision)),
+        reply("D2."), reply(json.dumps({**decision, "action": "conclude_meeting"})),
+    ])
+
+    Meeting(ClaudeModel(client=client)).start({
+        "topic": "Trading", "participants": [{"id": "risk", "name": "Risk"}],
+    })
+
+    def cached(request):
+        block = request["messages"][0]["content"][0]
+        assert "cache_control" in block
+        return request["system"], block["text"]
+
+    first, second = client.requests[1], client.requests[3]  # two deliberation rounds
+    assert cached(first) == cached(second)
+    assert '"participants"' in cached(first)[1] and "round_count" not in cached(first)[1]
+
+    for request in client.requests[:5]:
+        text = "".join(block["text"] for block in request["messages"][0]["content"])
+        assert json.loads(text)["topic"] == "Trading"
 
 
 def test_effort_model_and_fallbacks_are_configurable():

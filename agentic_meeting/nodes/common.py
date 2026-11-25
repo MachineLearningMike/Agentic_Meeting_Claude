@@ -45,13 +45,40 @@ def ask(
 ) -> str:
     """Send one node's instructions and data to its model; return the reply."""
 
+    shared, user = split_for_caching(data)
+
     return ctx.model_for(participant).complete(ModelRequest(
         node=node,
         system=system,
-        user=json.dumps(data, ensure_ascii=False, default=str, indent=2),
+        shared=shared,
+        user=user,
         participant=participant["id"] if participant else None,
         schema=schema,
     ))
+
+
+# Data that stays the same for the whole meeting. It is sent first, so that
+# Claude can cache it together with the node's instructions.
+SHARED_KEYS = ("topic", "participants", "project_context")
+
+
+def split_for_caching(data: dict) -> tuple[str, str]:
+    """Split a node's data into the part shared by every round and the rest.
+
+    The two texts joined are one JSON object, with the shared keys first.
+    """
+
+    def dump(value: dict) -> str:
+        return json.dumps(value, ensure_ascii=False, default=str, indent=2)
+
+    shared = {key: data[key] for key in SHARED_KEYS if key in data}
+    rest = {key: value for key, value in data.items() if key not in shared}
+
+    if not shared or not rest:
+        return "", dump(data)
+
+    # '{\n  ...shared' + ',\n' and '  ...rest\n}'
+    return dump(shared)[:-2] + ",\n", dump(rest)[2:]
 
 
 def recent_messages(state: dict, limit: int | None = 12) -> list[str]:

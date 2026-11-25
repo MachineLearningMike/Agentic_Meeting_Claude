@@ -87,8 +87,8 @@ class Participant(TypedDict, total=False):
     """A meeting participant.
 
     Non-human participants speak in every deliberation round. "instructions"
-    adds to their prompt, and "model" names an entry in
-    configurable["participant_models"]. Human participants answer the
+    adds to their prompt, and "model" names an entry in the
+    participant_models given to Meeting. Human participants answer the
     moderator's questions, which are written in their "language" if set.
     """
 

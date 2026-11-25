@@ -2,7 +2,8 @@ import json
 
 import pytest
 
-from fakes import CONCLUDE, CONTINUE, Resume, ScriptedModel, invoke, moderator_reply, new_harness
+from agentic_meeting import Meeting
+from agentic_meeting.testing import CONCLUDE, CONTINUE, ScriptedModel, moderator_reply
 from agentic_meeting.nodes.extract_artifacts import resolve_extraction
 
 
@@ -15,34 +16,29 @@ PARTICIPANTS = [
 ]
 
 
-def start(replies=None, participants=PARTICIPANTS, configurable=None, **state):
+def start(replies=None, participants=PARTICIPANTS, participant_models=None, **state):
     model = ScriptedModel(replies=replies or {})
-    harness = new_harness()
-    config = {"configurable": {
-        "thread_id": "t", "meeting_model": model, **(configurable or {})
-    }}
-    result = invoke(harness, 
-        {"topic": "Trading", "participants": participants, **state}, config
-    )
-    return harness, config, result, model
+    meeting = Meeting(model, participant_models=participant_models)
+    result = meeting.start({"topic": "Trading", "participants": participants, **state})
+    return meeting, result, model
 
 
 def test_each_ai_participant_speaks_once_per_round_in_order():
-    _, _, result, model = start({"moderator": [CONTINUE, CONCLUDE]})
+    _, result, model = start({"moderator": [CONTINUE, CONCLUDE]})
 
     speakers = [c["participant"] for c in model.calls_for("deliberation")]
 
     assert speakers == ["researcher", "risk", "researcher", "risk"]
-    assert result["round_count"] == 2
+    assert result.state["round_count"] == 2
 
 
 def test_later_speakers_see_this_round_and_earlier_ones_do_not():
-    _, _, _, model = start({
+    _, _, model = start({
         "deliberation:researcher": ["Use adaptive frequency."],
         "deliberation:risk": ["Drawdown risk is high."],
     })
 
-    first, second = [json.loads(c["human"]) for c in model.calls_for("deliberation")]
+    first, second = [json.loads(c["user"]) for c in model.calls_for("deliberation")]
 
     assert first["this_round"] == []
     assert second["this_round"] == [{
@@ -54,7 +50,7 @@ def test_later_speakers_see_this_round_and_earlier_ones_do_not():
 
 
 def test_role_description_and_instructions_reach_the_prompt():
-    _, _, _, model = start()
+    _, _, model = start()
 
     researcher, risk = [c["system"] for c in model.calls_for("deliberation")]
 
@@ -65,42 +61,42 @@ def test_role_description_and_instructions_reach_the_prompt():
 
 
 def test_contributions_are_recorded_per_participant():
-    _, _, result, _ = start({
+    _, result, _ = start({
         "deliberation:researcher": ["Idea."],
         "deliberation:risk": ["Risk."],
     })
 
-    named = [m for m in result["messages"] if m["role"] == "ai" and m.get("name")]
+    named = [m for m in result.state["messages"] if m["role"] == "assistant" and m.get("name")]
 
     assert [(m["name"], m["content"]) for m in named] == [
         ("researcher", "[Researcher, round 1]\n\nIdea."),
         ("risk", "[Risk analyst, round 1]\n\nRisk."),
     ]
-    assert result["latest_deliberation"] == "Researcher:\nIdea.\n\nRisk analyst:\nRisk."
+    assert result.state["latest_deliberation"] == "Researcher:\nIdea.\n\nRisk analyst:\nRisk."
 
 
 def test_humans_only_and_no_participants_use_a_single_reasoner():
     for participants in ([PARTICIPANTS[2]], []):
-        _, _, result, model = start(participants=participants)
+        _, result, model = start(participants=participants)
 
         calls = model.calls_for("deliberation")
         assert len(calls) == 1 and calls[0]["participant"] is None
         assert "You are a reasoning participant" in calls[0]["system"]
-        assert "this_round" not in calls[0]["human"]
+        assert "this_round" not in calls[0]["user"]
 
 
 def test_participants_can_use_their_own_models():
     risk_model = ScriptedModel(replies={"deliberation": ["From the risk model."]})
     participants = [PARTICIPANTS[0], {**PARTICIPANTS[1], "model": "careful"}]
 
-    _, _, result, main_model = start(
+    _, result, main_model = start(
         participants=participants,
-        configurable={"participant_models": {"careful": risk_model}},
+        participant_models={"careful": risk_model},
     )
 
     assert [c["participant"] for c in main_model.calls_for("deliberation")] == ["researcher"]
     assert [c["participant"] for c in risk_model.calls_for("deliberation")] == ["risk"]
-    assert "From the risk model." in result["latest_deliberation"]
+    assert "From the risk model." in result.state["latest_deliberation"]
 
 
 def test_unknown_participant_model_is_an_error():
@@ -115,45 +111,45 @@ def test_moderator_can_address_a_human_participant():
         "request_user_feedback", question="Is the drawdown acceptable?",
         ask_participant_id="owner",
     )
-    harness, config, result, _ = start({"moderator": [ask, CONCLUDE]})
+    meeting, result, _ = start({"moderator": [ask, CONCLUDE]})
 
-    payload = result["__question__"][0].value
+    payload = result.question
     assert payload["participant"] == {"id": "owner", "name": "Haruto"}
 
-    result = invoke(harness, Resume({"feedback": "Yes, up to 5%."}), config)
+    result = meeting.resume(result.thread_id, {"feedback": "Yes, up to 5%."})
 
-    human = [m for m in result["messages"] if m["role"] == "human" and m.get("name")]
+    human = [m for m in result.state["messages"] if m["role"] == "user" and m.get("name")]
     assert [(m["name"], m["content"]) for m in human] == [("owner", "[Haruto] Yes, up to 5%.")]
-    assert result["user_feedback"] == "Yes, up to 5%."
+    assert result.state["user_feedback"] == "Yes, up to 5%."
 
 
 def test_answer_to_a_general_question_can_name_its_speaker():
-    harness, config, _, _ = start({"moderator": [moderator_reply(
+    meeting, result, _ = start({"moderator": [moderator_reply(
         "request_user_feedback", question="Anyone?"), CONCLUDE]})
 
-    result = invoke(harness, Resume({"feedback": "Me.", "participant_id": "owner"}), config)
+    result = meeting.resume(result.thread_id, {"feedback": "Me.", "participant_id": "owner"})
 
-    human = [m for m in result["messages"] if m["role"] == "human" and m.get("name")]
+    human = [m for m in result.state["messages"] if m["role"] == "user" and m.get("name")]
     assert [(m["name"], m["content"]) for m in human] == [("owner", "[Haruto] Me.")]
 
 
 def test_answer_cannot_be_attributed_to_an_ai_participant():
-    harness, config, _, _ = start({"moderator": [moderator_reply(
+    meeting, result, _ = start({"moderator": [moderator_reply(
         "request_user_feedback", question="Anyone?"), CONCLUDE]})
 
-    result = invoke(harness, Resume({"feedback": "Me.", "participant_id": "risk"}), config)
+    result = meeting.resume(result.thread_id, {"feedback": "Me.", "participant_id": "risk"})
 
-    assert not [m for m in result["messages"] if m["role"] == "human" and m.get("name")]
+    assert not [m for m in result.state["messages"] if m["role"] == "user" and m.get("name")]
 
 
 @pytest.mark.parametrize("target", ["risk", "nobody"])
 def test_questions_can_only_be_addressed_to_humans(target):
     ask = moderator_reply("request_user_feedback", question="?", ask_participant_id=target)
 
-    _, _, result, _ = start({"moderator": [ask, CONCLUDE]})
+    _, result, _ = start({"moderator": [ask, CONCLUDE]})
 
-    assert result["moderator_ask_participant_id"] == ""
-    assert result["__question__"][0].value["participant"] is None
+    assert result.state["moderator_ask_participant_id"] == ""
+    assert result.question["participant"] is None
 
 
 def empty_state():
@@ -198,10 +194,10 @@ def test_without_participants_references_are_not_checked():
 
 
 def test_extractor_and_moderator_see_participants():
-    _, _, _, model = start()
+    _, _, model = start()
 
     for node in ("moderator", "extraction", "analysis"):
-        shown = json.loads(model.calls_for(node)[0]["human"])["participants"]
+        shown = json.loads(model.calls_for(node)[0]["user"])["participants"]
         assert [p["id"] for p in shown] == ["researcher", "risk", "owner"]
 
 

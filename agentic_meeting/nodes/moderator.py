@@ -20,15 +20,6 @@ VALID_ACTIONS = {
     "conclude_meeting",
 }
 
-PHASES = {
-    "continue_discussion": "deliberation",
-    "request_user_feedback": "awaiting_user",
-    "conclude_agenda": "agenda_transition",
-    "defer_agenda": "agenda_transition",
-    "revisit_agenda": "agenda_transition",
-    "conclude_meeting": "finalization",
-}
-
 # Structured output: Claude's reply is guaranteed to match this schema.
 DECISION_SCHEMA = {
     "type": "object",
@@ -192,11 +183,9 @@ def moderate(state: dict, ctx) -> dict:
         "moderator_target_agenda_id": target_id,
         "moderator_ask_participant_id": ask_id,
         "agenda_summary": agenda_summary,
-        "pending_user_input": action == "request_user_feedback",
-        "current_phase": PHASES[action],
         "messages": [
             message(
-                "ai",
+                "assistant",
                 f"[Moderator]\nAction: {action}\nReason: {reason}\nQuestion: {question}",
             )
         ],

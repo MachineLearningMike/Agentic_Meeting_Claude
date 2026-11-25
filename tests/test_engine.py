@@ -2,7 +2,7 @@
 
 import pytest
 
-from fakes import ASK, CONCLUDE, ScriptedModel
+from agentic_meeting.testing import ASK, CONCLUDE, ScriptedModel
 from agentic_meeting import (
     Meeting,
     MeetingOutput,
@@ -33,7 +33,7 @@ def test_thread_id_is_generated_or_kept():
 
 def test_input_outside_the_contract_is_ignored():
     result = Meeting(ScriptedModel()).start(
-        {"topic": "Trading", "round_count": 99, "current_phase": "x"}
+        {"topic": "Trading", "round_count": 99, "moderator_action": "x"}
     )
 
     assert result.state["round_count"] == 1

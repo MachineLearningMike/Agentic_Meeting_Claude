@@ -130,7 +130,7 @@ def test_extraction_sees_the_whole_conversation():
     result = meeting.start({"topic": "Trading"})
     meeting.resume(result.thread_id, "Adaptive, approved.")
 
-    conversation = json.loads(model.calls_for("extraction")[0]["human"])["conversation"]
+    conversation = json.loads(model.calls_for("extraction")[0]["user"])["conversation"]
 
     assert any("Use adaptive frequency." in entry for entry in conversation)
     assert "Adaptive, approved." in conversation

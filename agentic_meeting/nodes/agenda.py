@@ -47,6 +47,6 @@ def advance_agenda(state: dict, ctx) -> dict:
         "round_count": next_item["round_count"],
         "user_feedback": "",
         "messages": [
-            message("ai", f"[Agenda] Now discussing: {next_item['description']}")
+            message("assistant", f"[Agenda] Now discussing: {next_item['description']}")
         ],
     }

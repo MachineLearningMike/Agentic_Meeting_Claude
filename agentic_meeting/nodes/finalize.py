@@ -50,7 +50,5 @@ def finalize_meeting(state: dict, ctx) -> dict:
     return {
         "meeting_summary": summary,
         "agenda": agenda,
-        "current_phase": "completed",
-        "pending_user_input": False,
-        "messages": [message("ai", f"[Meeting Report]\n\n{summary}")],
+        "messages": [message("assistant", f"[Meeting Report]\n\n{summary}")],
     }

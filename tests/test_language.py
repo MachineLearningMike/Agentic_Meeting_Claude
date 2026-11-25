@@ -2,7 +2,8 @@ import json
 
 import pytest
 
-from fakes import ScriptedModel, invoke, new_harness
+from agentic_meeting import Meeting
+from agentic_meeting.testing import ScriptedModel
 
 
 NODES = ("analysis", "deliberation", "moderator", "finalize", "extraction")
@@ -11,9 +12,7 @@ STRUCTURED = {"moderator", "extraction"}
 
 def run(**state):
     model = ScriptedModel()
-    harness = new_harness()
-    config = {"configurable": {"thread_id": "t", "meeting_model": model}}
-    result = invoke(harness, {"topic": "取引頻度を減らす", **state}, config)
+    result = Meeting(model).start({"topic": "取引頻度を減らす", **state})
     return result, model
 
 
@@ -33,7 +32,7 @@ def test_without_a_language_every_node_follows_the_meeting():
 def test_a_meeting_language_applies_to_every_node():
     result, model = run(language="日本語")
 
-    assert result["language"] == "日本語"
+    assert result.state["language"] == "日本語"
     for node in NODES:
         assert "LANGUAGE: Write all your output in 日本語." in system_prompt(model, node)
 
@@ -52,7 +51,7 @@ def test_participants_with_a_language_are_shown_to_the_moderator():
     ]
 
     _, model = run(participants=participants)
-    shown = json.loads(model.calls_for("moderator")[0]["human"])["participants"]
+    shown = json.loads(model.calls_for("moderator")[0]["user"])["participants"]
 
     assert [p.get("language") for p in shown] == [None, "English", None]
     assert "write question_for_user in their" in system_prompt(model, "moderator")
@@ -61,7 +60,7 @@ def test_participants_with_a_language_are_shown_to_the_moderator():
 def test_non_ascii_text_reaches_the_model_unescaped():
     _, model = run(background="手数料が利益を減らしている。")
 
-    human = model.calls_for("analysis")[0]["human"]
+    human = model.calls_for("analysis")[0]["user"]
     assert "取引頻度を減らす" in human
     assert "手数料が利益を減らしている。" in human
 

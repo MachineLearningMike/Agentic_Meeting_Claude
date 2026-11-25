@@ -76,7 +76,7 @@ class ScriptedModel:
             "node": request.node,
             "participant": request.participant,
             "system": request.system,
-            "human": request.user,
+            "user": request.shared + request.user,
             "schema": request.schema,
         })
 

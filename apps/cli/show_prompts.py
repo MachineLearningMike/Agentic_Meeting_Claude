@@ -83,7 +83,7 @@ def main() -> None:
             "### User message",
             "",
             "```json",
-            call["human"].strip(),
+            call["user"].strip(),
             "```",
             "",
         ]

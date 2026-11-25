@@ -29,6 +29,8 @@ class ModelRequest:
     user: str                       # the meeting data, as JSON
     participant: str | None = None  # participant id for a participant's turn
     schema: dict | None = None      # JSON schema the reply must follow
+    shared: str = ""                # start of the data that is the same in
+                                    # every round; shared + user is the JSON
 
 
 class Model(Protocol):
@@ -47,6 +49,9 @@ class ClaudeModel:
     effort:      thinking depth for every node: low, medium, high, xhigh, max.
     node_effort: per-node overrides, e.g. {"analysis": "low"}.
     fallbacks:   use server-side refusal fallbacks (recommended).
+    cache_ttl:   how long cached prompt parts are kept: "5m" or "1h". Use
+                 "1h" when people often take more than five minutes to answer
+                 (cache writes then cost more); None turns caching off.
     client:      an anthropic.Anthropic client; by default one is created from
                  the environment (ANTHROPIC_API_KEY or `ant auth login`).
     """
@@ -59,8 +64,13 @@ class ClaudeModel:
         node_effort: dict[str, str] | None = None,
         max_tokens: int = 16000,
         fallbacks: bool = True,
+        cache_ttl: str | None = "5m",
         client: Any = None,
     ):
+        if cache_ttl not in ("5m", "1h", None):
+            raise ValueError("cache_ttl must be '5m', '1h' or None.")
+
+        self.cache_ttl = cache_ttl
         self.model = model
         self.effort = effort
         self.node_effort = node_effort or {}
@@ -81,16 +91,29 @@ class ClaudeModel:
                 "schema": request.schema,
             }
 
+        # A node's instructions and the meeting-wide data repeat every round,
+        # so both end in a cache breakpoint; what changes comes after them.
+        # (Claude only caches a prefix of about 512 tokens or more.)
+        system: dict = {"type": "text", "text": request.system}
+        content: list[dict] = [{"type": "text", "text": request.user}]
+
+        if request.shared:
+            content.insert(0, {"type": "text", "text": request.shared})
+
+        if self.cache_ttl:
+            cache_control = {"type": "ephemeral"}
+            if self.cache_ttl != "5m":
+                cache_control["ttl"] = self.cache_ttl
+
+            system["cache_control"] = cache_control
+            if request.shared:
+                content[0]["cache_control"] = cache_control
+
         params: dict = {
             "model": self.model,
             "max_tokens": self.max_tokens,
-            # Each node's instructions repeat every round, so they are cached.
-            "system": [{
-                "type": "text",
-                "text": request.system,
-                "cache_control": {"type": "ephemeral"},
-            }],
-            "messages": [{"role": "user", "content": request.user}],
+            "system": [system],
+            "messages": [{"role": "user", "content": content}],
             "output_config": output_config,
         }
 

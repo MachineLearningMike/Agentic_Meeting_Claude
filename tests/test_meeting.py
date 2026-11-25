@@ -2,7 +2,8 @@ import json
 
 import pytest
 
-from fakes import ASK, CONCLUDE, CONTINUE, Resume, ScriptedModel, invoke, new_harness
+from agentic_meeting import Meeting
+from agentic_meeting.testing import ASK, CONCLUDE, CONTINUE, ScriptedModel
 
 
 INITIAL_STATE = {
@@ -18,27 +19,25 @@ INITIAL_STATE = {
 
 
 def start(model, **overrides):
-    """Start a meeting on a fresh harness and return (harness, config, result)."""
+    """Start a meeting and return (meeting, result)."""
 
-    harness = new_harness()
-    config = {"configurable": {"thread_id": "test", "meeting_model": model}}
-    result = invoke(harness, {**INITIAL_STATE, **overrides}, config)
-    return harness, config, result
+    meeting = Meeting(model)
+    return meeting, meeting.start({**INITIAL_STATE, **overrides})
 
 
 def test_normal_meeting_completes():
     model = ScriptedModel()
 
-    _, _, result = start(model)
+    _, result = start(model)
 
-    assert "__question__" not in result
-    assert result["current_phase"] == "completed"
-    assert result["meeting_summary"] == "Report."
-    assert result["round_count"] == 1
-    assert result["current_agenda"] == "Trading frequency is too high."
+    assert result.finished
+    assert result.finished
+    assert result.state["meeting_summary"] == "Report."
+    assert result.state["round_count"] == 1
+    assert result.state["current_agenda"] == "Trading frequency is too high."
 
-    record = result["meeting_record"]
-    assert record["meeting_id"] == result["meeting_id"]
+    record = result.state["meeting_record"]
+    assert record["meeting_id"] == result.state["meeting_id"]
     assert record["project_id"] == "trading-ai"
     assert record["topic"] == "Adaptive trading frequency"
 
@@ -47,92 +46,87 @@ def test_normal_meeting_completes():
     ]
 
 
-def test_feedback_interrupt_and_resume():
+def test_feedback_pause_and_resume():
     model = ScriptedModel(replies={"moderator": [ASK, CONCLUDE]})
 
-    harness, config, result = start(model)
+    meeting, result = start(model)
 
-    assert result["__question__"][0].value["question"] == "Which approach?"
+    assert result.question["question"] == "Which approach?"
 
-    result = invoke(harness, 
-        Resume({"feedback": "I prefer adaptive frequency."}), config
-    )
+    result = meeting.resume(result.thread_id, {"feedback": "I prefer adaptive frequency."})
 
-    assert "__question__" not in result
-    assert result["user_feedback"] == "I prefer adaptive frequency."
-    assert result["round_count"] == 2
+    assert result.finished
+    assert result.state["user_feedback"] == "I prefer adaptive frequency."
+    assert result.state["round_count"] == 2
     assert any(
-        message["role"] == "human"
+        message["role"] == "user"
         and message["content"] == "I prefer adaptive frequency."
-        for message in result["messages"]
+        for message in result.state["messages"]
     )
 
     # Feedback reaches the analysis and deliberation that follow it.
-    second_analysis = json.loads(model.calls_for("analysis")[1]["human"])
+    second_analysis = json.loads(model.calls_for("analysis")[1]["user"])
     assert second_analysis["user_feedback"] == "I prefer adaptive frequency."
 
 
 def test_resume_accepts_plain_string():
     model = ScriptedModel(replies={"moderator": [ASK, CONCLUDE]})
 
-    harness, config, _ = start(model)
-    result = invoke(harness, Resume("Plain answer"), config)
+    meeting, result = start(model)
+    result = meeting.resume(result.thread_id, "Plain answer")
 
-    assert result["user_feedback"] == "Plain answer"
-    assert result["current_phase"] == "completed"
+    assert result.state["user_feedback"] == "Plain answer"
+    assert result.finished
 
 
 def test_declining_feedback_stops_questions():
     model = ScriptedModel(replies={"moderator": [ASK] * 10})
 
-    harness, config, result = start(model, max_rounds_per_agenda=5)
-    interrupts = 0
+    meeting, result = start(model, max_rounds_per_agenda=5)
+    questions = 0
 
-    while result.get("__question__"):
-        interrupts += 1
-        result = invoke(harness, 
-            Resume({"feedback": "", "decline_future_questions": True}),
-            config,
-        )
+    while result.question:
+        questions += 1
+        result = meeting.resume(result.thread_id, {"feedback": "", "decline_future_questions": True})
 
-    assert interrupts == 1
-    assert result["current_phase"] == "completed"
-    assert result["round_count"] == 5
+    assert questions == 1
+    assert result.finished
+    assert result.state["round_count"] == 5
 
 
 def test_round_cap_bounds_feedback_requests():
     model = ScriptedModel(replies={"moderator": [ASK] * 10})
 
-    harness, config, result = start(model, max_rounds_per_agenda=2)
-    interrupts = 0
+    meeting, result = start(model, max_rounds_per_agenda=2)
+    questions = 0
 
-    while result.get("__question__"):
-        interrupts += 1
-        result = invoke(harness, Resume({"feedback": "ok"}), config)
+    while result.question:
+        questions += 1
+        result = meeting.resume(result.thread_id, {"feedback": "ok"})
 
-    assert interrupts == 1
-    assert result["round_count"] == 2
-    assert result["current_phase"] == "completed"
+    assert questions == 1
+    assert result.state["round_count"] == 2
+    assert result.finished
 
 
 def test_round_cap_bounds_continued_discussion():
     model = ScriptedModel(replies={"moderator": [CONTINUE] * 10})
 
-    _, _, result = start(model, max_rounds_per_agenda=3)
+    _, result = start(model, max_rounds_per_agenda=3)
 
-    assert result["round_count"] == 3
-    assert result["moderator_action"] == "conclude_agenda"
-    assert result["agenda"][0]["status"] == "concluded"
+    assert result.state["round_count"] == 3
+    assert result.state["moderator_action"] == "conclude_agenda"
+    assert result.state["agenda"][0]["status"] == "concluded"
 
 
 def test_invalid_moderator_output_continues_until_cap():
     model = ScriptedModel(replies={"moderator": ["not json"] * 10})
 
-    _, _, result = start(model, max_rounds_per_agenda=2)
+    _, result = start(model, max_rounds_per_agenda=2)
 
-    assert result["round_count"] == 2
-    assert result["current_phase"] == "completed"
-    assert result["moderator_reasoning"] == "Invalid moderator response."
+    assert result.state["round_count"] == 2
+    assert result.finished
+    assert result.state["moderator_reasoning"] == "Invalid moderator response."
 
 
 def test_extracted_artifacts_are_recorded():
@@ -151,51 +145,49 @@ def test_extracted_artifacts_are_recorded():
     })
     model = ScriptedModel(replies={"extraction": [extraction]})
 
-    _, _, result = start(model)
-    record = result["meeting_record"]
+    _, result = start(model)
+    record = result.state["meeting_record"]
 
-    assert not result["extraction_error"]
+    assert not result.state["extraction_error"]
     assert [p["description"] for p in record["proposals"]] == [
         "Develop an adaptive policy."
     ]
     assert record["arguments"][0]["position"] == "support"
     assert record["unresolved_issues"][0]["status"] == "open"
     assert all(item["id"] for item in record["proposals"] + record["arguments"])
-    assert result["proposals"] == record["proposals"]
+    assert result.state["proposals"] == record["proposals"]
 
 
 def test_invalid_extraction_is_retried_once_with_the_error():
     valid = json.dumps({"proposals": [{"description": "Adaptive policy"}]})
     model = ScriptedModel(replies={"extraction": ["not json", valid]})
 
-    _, _, result = start(model)
+    _, result = start(model)
     attempts = model.calls_for("extraction")
 
     assert len(attempts) == 2
-    assert "previous_attempt_error" not in json.loads(attempts[0]["human"])
-    assert "No JSON object found" in json.loads(attempts[1]["human"])["previous_attempt_error"]
-    assert not result["extraction_error"]
-    assert result["meeting_record"]["proposals"][0]["description"] == "Adaptive policy"
+    assert "previous_attempt_error" not in json.loads(attempts[0]["user"])
+    assert "No JSON object found" in json.loads(attempts[1]["user"])["previous_attempt_error"]
+    assert not result.state["extraction_error"]
+    assert result.state["meeting_record"]["proposals"][0]["description"] == "Adaptive policy"
 
 
 def test_invalid_extraction_keeps_meeting():
     model = ScriptedModel(replies={"extraction": ["not json", "still not json"]})
 
-    _, _, result = start(model)
-    record = result["meeting_record"]
+    _, result = start(model)
+    record = result.state["meeting_record"]
 
-    assert result["current_phase"] == "completed"
-    assert result["meeting_summary"] == "Report."
-    assert result["extraction_error"] == "No JSON object found in model response."
-    assert record["extraction_error"] == result["extraction_error"]
+    assert result.finished
+    assert result.state["meeting_summary"] == "Report."
+    assert result.state["extraction_error"] == "No JSON object found in model response."
+    assert record["extraction_error"] == result.state["extraction_error"]
     assert record["proposals"] == []
 
 
 def test_missing_model_raises():
-    harness = new_harness()
-
     with pytest.raises(ValueError, match="No meeting model supplied"):
-        invoke(harness, INITIAL_STATE, {"configurable": {"thread_id": "test"}})
+        Meeting(None).start(INITIAL_STATE)
 
 
 if __name__ == "__main__":

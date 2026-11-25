@@ -52,5 +52,4 @@ def analyze_context(state: dict, ctx) -> dict:
 
     return {
         "context_analysis": ask(ctx, "analysis", system_prompt, context),
-        "current_phase": "analysis",
     }

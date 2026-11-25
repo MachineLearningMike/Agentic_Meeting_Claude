@@ -58,7 +58,6 @@ def initialize_meeting(state: dict, ctx) -> dict:
         "agenda_complete": False,
         "current_agenda_id": first["id"],
         "current_agenda": first["description"],
-        "current_phase": "orientation",
         "round_count": 0,
         "total_rounds": 0,
         "max_total_rounds": max_total_rounds,
@@ -69,7 +68,7 @@ def initialize_meeting(state: dict, ctx) -> dict:
                 f"Meeting started with {len(agenda)} agenda item(s).\n{agenda_lines}",
             ),
             message(
-                "human",
+                "user",
                 f"Topic: {state.get('topic', '')}\n"
                 f"Background: {state.get('background', '')}\n"
                 f"Prior state: {state.get('prior_state', '')}\n"

@@ -630,5 +630,5 @@ IMPORTANT RULES:
         "meeting_record": meeting_record,
         "extraction_error": extraction_error,
         "extraction_warnings": warnings,
-        "messages": [message("ai", status_message)],
+        "messages": [message("assistant", status_message)],
     }

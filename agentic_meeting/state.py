@@ -26,7 +26,7 @@ from .schemas import (
 class Message(TypedDict, total=False):
     """One entry of the meeting transcript."""
 
-    role: Literal["system", "human", "ai"]
+    role: Literal["system", "user", "assistant"]
     content: str
     name: str  # participant id, when a participant spoke
 
@@ -74,14 +74,12 @@ class MeetingState(TypedDict, total=False):
     agenda_complete: bool
 
     # Deliberation control
-    current_phase: str
     current_agenda_id: str
     current_agenda: str
     round_count: int
     total_rounds: int
     max_rounds_per_agenda: int
     max_total_rounds: int
-    pending_user_input: bool
     moderator_action: str
     moderator_question: str
     moderator_reasoning: str

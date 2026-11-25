@@ -173,8 +173,12 @@ Messages API:
   a request Claude declines is retried on a fallback model in the same call.
   If it is still declined, `ModelRefusal` is raised (during extraction the
   meeting is kept and the failure reported instead).
-- **Prompt caching:** each step's instructions are marked for caching, since
-  they repeat every round.
+- **Prompt caching:** each step's instructions, and the data that stays the
+  same for the whole meeting (topic, participants, project memory), are sent
+  first and marked for caching, since they repeat every round. Claude keeps
+  them for five minutes after each use; with `ClaudeModel(cache_ttl="1h")`
+  for an hour, which suits meetings where people take longer to answer (cache
+  writes then cost more). `cache_ttl=None` turns caching off.
 - **Per-participant models:** a participant with `"model": "key"` uses
   `participant_models={"key": ClaudeModel("claude-sonnet-5-5")}`.
 
@@ -192,7 +196,7 @@ Messages API:
 pytest
 ```
 
-188 tests, no API key needed: a scripted model stands in for Claude, and a
+191 tests, no API key needed: a scripted model stands in for Claude, and a
 fake Anthropic client checks the exact requests `ClaudeModel` sends.
 
 ## Layout

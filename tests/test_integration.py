@@ -4,9 +4,8 @@ import json
 
 import pytest
 
-from fakes import ASK, CONCLUDE, Resume, ScriptedModel, invoke, moderator_reply, new_harness
-from agentic_meeting import MeetingStore, SqliteCheckpoints
-from fakes import Harness
+from agentic_meeting.testing import ASK, CONCLUDE, ScriptedModel, moderator_reply
+from agentic_meeting import Meeting, MeetingStore, MemoryCheckpoints, SqliteCheckpoints
 
 
 PARTICIPANTS = [
@@ -25,30 +24,26 @@ def next_item(summary):
     return moderator_reply("conclude_agenda", agenda_summary=summary)
 
 
-def run(harness, store, thread_id, model, meeting_input, resumes=()):
+def run(store, model, meeting_input, answers=()):
     """Run a meeting to the end, answering each feedback question in turn."""
 
-    config = {"configurable": {
-        "thread_id": thread_id, "meeting_model": model, "meeting_store": store,
-    }}
-    result = invoke(harness, meeting_input, config)
+    meeting = Meeting(model, store=store)
+    result = meeting.start(meeting_input)
 
-    for answer in resumes:
-        assert result.get("__question__"), "expected a feedback question"
-        result = invoke(harness, Resume({"feedback": answer}), config)
+    for answer in answers:
+        assert result.question, "expected a feedback question"
+        result = meeting.resume(result.thread_id, {"feedback": answer})
 
-    assert not result.get("__question__")
+    assert result.finished
     return result
 
 
 def test_trading_project_across_three_meetings(store):
-    harness = new_harness()
-
     # Meeting 1: two agenda items, a question to the owner, open issues.
     ask_owner = moderator_reply(
         "request_user_feedback", question="Fixed or adaptive?", ask_participant_id="owner"
     )
-    first = run(harness, store, "m1", ScriptedModel(replies={
+    first = run(store, ScriptedModel(replies={
         "moderator": [ask_owner, next_item("Adaptive preferred."), next_item("Costs open.")],
         "extraction": [json.dumps({
             "proposals": [{"ref": "p1", "description": "Adaptive trading frequency",
@@ -68,16 +63,16 @@ def test_trading_project_across_three_meetings(store):
             {"id": "approach", "description": "Fixed versus adaptive frequency"},
             {"id": "costs", "description": "Cost impact"},
         ],
-    }, resumes=["Adaptive, if drawdown stays under 5%."])
+    }, answers=["Adaptive, if drawdown stays under 5%."])
 
-    record = first["meeting_record"]
+    record = first.state["meeting_record"]
     proposal_id = record["proposals"][0]["id"]
     variables_id, costs_id = [i["id"] for i in record["unresolved_issues"]]
 
-    assert first["extraction_warnings"] == []
+    assert first.state["extraction_warnings"] == []
     assert record["arguments"][0]["target_id"] == proposal_id
     assert [i["status"] for i in record["agenda_items"]] == ["concluded", "concluded"]
-    assert any(m.get("name") == "owner" for m in first["messages"] if m["role"] == "human")
+    assert any(m.get("name") == "owner" for m in first.state["messages"] if m["role"] == "user")
 
     # Meeting 2 starts from Meeting 1 and refines the policy.
     model = ScriptedModel(replies={
@@ -94,20 +89,20 @@ def test_trading_project_across_three_meetings(store):
             ],
         })],
     })
-    second = run(harness, store, "m2", model, {
+    second = run(store, model, {
         "project_id": "trading-ai",
         "topic": "Design the adaptive policy",
         "participants": PARTICIPANTS,
     })
 
-    analysis = json.loads(model.calls_for("analysis")[0]["human"])["project_context"]
+    analysis = json.loads(model.calls_for("analysis")[0]["user"])["project_context"]
     assert [p["id"] for p in analysis["current_state"]["proposals"]] == [proposal_id]
-    assert analysis["history"][0]["meeting_id"] == first["meeting_id"]
-    assert second["meeting_record"]["proposals"] == []  # repeat was dropped
-    decision_id = second["meeting_record"]["decisions"][0]["id"]
+    assert analysis["history"][0]["meeting_id"] == first.state["meeting_id"]
+    assert second.state["meeting_record"]["proposals"] == []  # repeat was dropped
+    decision_id = second.state["meeting_record"]["decisions"][0]["id"]
 
     # Meeting 3 reviews the backtest, replaces the decision and accepts.
-    third = run(harness, store, "m3", ScriptedModel(replies={
+    third = run(store, ScriptedModel(replies={
         "moderator": [CONCLUDE],
         "extraction": [json.dumps({
             "decisions": [{"ref": "d2", "description": "Use volatility and spread",
@@ -124,11 +119,11 @@ def test_trading_project_across_three_meetings(store):
         "participants": PARTICIPANTS,
     })
 
-    assert third["extraction_warnings"] == []
+    assert third.state["extraction_warnings"] == []
 
     state = store.get_project_state("trading-ai")
     decisions = {d["id"]: d for d in state["decisions"]}
-    new_decision_id = third["meeting_record"]["decisions"][0]["id"]
+    new_decision_id = third.state["meeting_record"]["decisions"][0]["id"]
 
     assert [(p["id"], p["status"]) for p in state["proposals"]] == [(proposal_id, "accepted")]
     assert decisions[decision_id]["status"] == "superseded"
@@ -139,7 +134,7 @@ def test_trading_project_across_three_meetings(store):
     assert len(store.list_meetings("trading-ai")) == 3
 
     # History keeps what each meeting saw at the time.
-    assert store.get(second["meeting_id"])["decisions"][0]["status"] == "approved"
+    assert store.get(second.state["meeting_id"])["decisions"][0]["status"] == "approved"
 
 
 def test_paused_meeting_resumes_after_restart(tmp_path, store):
@@ -147,39 +142,35 @@ def test_paused_meeting_resumes_after_restart(tmp_path, store):
     meeting_input = {"project_id": "trading-ai", "topic": "Adaptive trading frequency"}
 
     # First process: the meeting pauses for feedback.
-    harness = Harness(SqliteCheckpoints(checkpoints))
     first_model = ScriptedModel(replies={"moderator": [ASK]})
-    config = {"configurable": {
-        "thread_id": "meeting-1", "meeting_model": first_model, "meeting_store": store,
-    }}
-    paused = invoke(harness, meeting_input, config)
+    paused = Meeting(
+        first_model, store=store, checkpoints=SqliteCheckpoints(checkpoints)
+    ).start(meeting_input, thread_id="meeting-1")
 
-    assert paused["__question__"][0].value["question"] == "Which approach?"
+    assert paused.question["question"] == "Which approach?"
     assert store.list_meetings() == []
 
     # Second process: new checkpoint connection and model pick the meeting up.
-    harness = Harness(SqliteCheckpoints(checkpoints))
     second_model = ScriptedModel(replies={"moderator": [CONCLUDE]})
-    config["configurable"]["meeting_model"] = second_model
-    result = invoke(harness, Resume({"feedback": "Adaptive."}), config)
+    result = Meeting(
+        second_model, store=store, checkpoints=SqliteCheckpoints(checkpoints)
+    ).resume("meeting-1", {"feedback": "Adaptive."})
 
-    assert result["meeting_saved"] is True
-    assert result["meeting_id"] == paused["meeting_id"]
+    assert result.state["meeting_saved"] is True
+    assert result.state["meeting_id"] == paused.state["meeting_id"]
     assert [c["node"] for c in second_model.calls] == [
         "analysis", "deliberation", "moderator", "finalize", "extraction",
     ]
-    feedback = json.loads(second_model.calls_for("analysis")[0]["human"])["user_feedback"]
+    feedback = json.loads(second_model.calls_for("analysis")[0]["user"])["user_feedback"]
     assert feedback == "Adaptive."
-    assert store.get(result["meeting_id"]) is not None
+    assert store.get(result.state["meeting_id"]) is not None
 
 
 def test_interleaved_projects_stay_isolated(store):
-    harness = new_harness()
+    checkpoints = MemoryCheckpoints()
 
-    def config(thread_id, model):
-        return {"configurable": {
-            "thread_id": thread_id, "meeting_model": model, "meeting_store": store,
-        }}
+    def meeting(model):
+        return Meeting(model, store=store, checkpoints=checkpoints)
 
     def extraction(text):
         return [json.dumps({"proposals": [{"description": text}]})]
@@ -188,13 +179,13 @@ def test_interleaved_projects_stay_isolated(store):
     model_b = ScriptedModel(replies={"extraction": extraction("B idea")})
 
     # A pauses; B runs to the end in between; then A resumes.
-    paused = invoke(harness, {"project_id": "alpha", "topic": "A"}, config("a", model_a))
-    done_b = invoke(harness, {"project_id": "beta", "topic": "B"}, config("b", model_b))
-    done_a = invoke(harness, Resume({"feedback": "go"}), config("a", model_a))
+    paused = meeting(model_a).start({"project_id": "alpha", "topic": "A"}, thread_id="a")
+    done_b = meeting(model_b).start({"project_id": "beta", "topic": "B"}, thread_id="b")
+    done_a = meeting(model_a).resume("a", {"feedback": "go"})
 
-    assert paused["__question__"]
-    assert done_a["topic"] == "A" and done_b["topic"] == "B"
-    assert done_a["meeting_id"] != done_b["meeting_id"]
+    assert paused.question
+    assert done_a.state["topic"] == "A" and done_b.state["topic"] == "B"
+    assert done_a.state["meeting_id"] != done_b.state["meeting_id"]
 
     def proposals(project_id):
         return [p["description"] for p in store.get_project_state(project_id)["proposals"]]
@@ -205,16 +196,14 @@ def test_interleaved_projects_stay_isolated(store):
 
 
 def test_empty_feedback_lets_the_meeting_continue():
-    harness = new_harness()
-    model = ScriptedModel(replies={"moderator": [ASK, CONCLUDE]})
-    config = {"configurable": {"thread_id": "t", "meeting_model": model}}
+    meeting = Meeting(ScriptedModel(replies={"moderator": [ASK, CONCLUDE]}))
 
-    invoke(harness, {"topic": "Trading"}, config)
-    result = invoke(harness, Resume({"feedback": ""}), config)
+    paused = meeting.start({"topic": "Trading"})
+    result = meeting.resume(paused.thread_id, {"feedback": ""})
 
-    assert result["user_feedback"] == ""
-    assert result["current_phase"] == "completed"
-    assert result["meeting_summary"] == "Report."
+    assert result.state["user_feedback"] == ""
+    assert result.finished
+    assert result.state["meeting_summary"] == "Report."
 
 
 if __name__ == "__main__":

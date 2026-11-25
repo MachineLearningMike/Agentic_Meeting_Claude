@@ -87,7 +87,6 @@ def deliberate(state: dict, ctx) -> dict:
     progress = {
         "round_count": round_count,
         "total_rounds": state.get("total_rounds", 0) + 1,
-        "current_phase": "deliberation",
     }
 
     # Without participants, a single unnamed reasoner deliberates.
@@ -99,7 +98,7 @@ def deliberate(state: dict, ctx) -> dict:
             "latest_deliberation": contribution,
             "messages": [
                 message(
-                    "ai",
+                    "assistant",
                     f"[Deliberation, round {round_count}]\n\n{contribution}",
                 )
             ],
@@ -124,7 +123,7 @@ def deliberate(state: dict, ctx) -> dict:
             {"participant_id": speaker["id"], "name": name, "contribution": contribution}
         ]
         messages.append(message(
-            "ai",
+            "assistant",
             f"[{name}, round {round_count}]\n\n{contribution}",
             name=speaker["id"],
         ))

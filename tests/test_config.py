@@ -4,7 +4,7 @@ import threading
 
 import pytest
 
-from fakes import ScriptedModel, moderator_reply
+from agentic_meeting.testing import ScriptedModel, moderator_reply
 from agentic_meeting import (
     ConfigError,
     ConsoleHub,
@@ -132,7 +132,7 @@ def test_role_statements_reach_the_prompts():
 
     assert "Identifies risks." in model.calls_for("deliberation")[0]["system"]
     # The moderator knows the human's role statement, to decide whom to ask.
-    seen = json.loads(model.calls_for("moderator")[0]["human"])["participants"]
+    seen = json.loads(model.calls_for("moderator")[0]["user"])["participants"]
     assert seen[1] == {
         "id": "haruto", "name": "Haruto", "role": "", "is_human": True,
         "description": "Owns the budget.",
@@ -354,6 +354,6 @@ def test_hub_carries_a_whole_meeting():
     result = meeting.resume(result.thread_id, reply())
 
     assert result.finished
-    assert {"role": "human", "content": "[Haruto] Ten thousand.", "name": "owner"} in (
+    assert {"role": "user", "content": "[Haruto] Ten thousand.", "name": "owner"} in (
         result.state["messages"]
     )
